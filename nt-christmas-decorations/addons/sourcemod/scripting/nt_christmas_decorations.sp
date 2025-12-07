@@ -8,9 +8,8 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdktools_tempents>
-#include <neotokyo>
 
-#define PLUGIN_VERSION "0.5.2"
+#define PLUGIN_VERSION "0.5.3"
 
 // How many different models to randomly choose from
 #define NUM_MODELS 1
@@ -34,9 +33,10 @@ static char _models[NUM_MODELS][] = {
 };
 static int _model_indices[NUM_MODELS];
 
-ConVar g_hCvar_Timelimit = null, g_hCvar_Scorelimit = null, g_hCvar_Chattime = null,
-	g_hCvar_MaxDecorations = null, g_hCvar_SpecsCanSpawnDecorations,
-	g_hCvar_LightSwitchSpeed = null;
+ConVar g_hCvar_Timelimit = null,
+	g_hCvar_MaxDecorations = null,
+	g_hCvar_LightSwitchSpeed = null,
+	g_hCvar_Chattime = null;
 
 static int _numPerPlayer[NEO_MAX_PLAYERS + 1];
 
@@ -52,10 +52,6 @@ public Plugin myinfo = {
 
 public void OnPluginStart()
 {
-	if(!HookEventEx("game_round_start", Event_RoundStart)) {
-		SetFailState("Failed to hook event");
-	}
-
 	RegConsoleCmd("sm_gift", Cmd_SpawnGiftbox);
 	RegConsoleCmd("sm_present", Cmd_SpawnGiftbox);
 
@@ -68,9 +64,6 @@ public void OnPluginStart()
 
 	g_hCvar_MaxDecorations = CreateConVar("sm_festive_decorations_christmas_limit", "20",
 		"How many !gifts per person per round max.", _, true, 0.0, true, 1000.0);
-
-	g_hCvar_SpecsCanSpawnDecorations = CreateConVar("sm_festive_decorations_christmas_specs_may_spawn", "2",
-		"Whether spectators are allowed to !gift. 0: spectators can never spawn !gifts, 1: spectators can always spawn !gifts visible to all players, 2: spectator !gifts are only visible to other spectating players.", _, true, 0.0, true, 2.0);
 }
 
 public void LightSwitchSpeedChanged(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -89,14 +82,6 @@ public Action Cmd_SpawnGiftbox(int client, int argc)
 		return Plugin_Handled;
 	}
 
-	int team = GetClientTeam(client);
-	bool is_speccing = g_hCvar_SpecsCanSpawnDecorations.IntValue == 1 ? false : (team <= TEAM_SPECTATOR || !IsPlayerAlive(client));
-
-	if (g_hCvar_SpecsCanSpawnDecorations.IntValue == 0 && is_speccing) {
-		PrintToChat(client, "[SM] Spectating players may not spawn decorations!");
-		return Plugin_Handled;
-	}
-
 	if (_numPerPlayer[client] >= g_hCvar_MaxDecorations.IntValue) {
 		PrintToChat(client, "[SM] You can only spawn %d decorations per round!",
 			g_hCvar_MaxDecorations.IntValue);
@@ -112,7 +97,7 @@ public Action Cmd_SpawnGiftbox(int client, int argc)
 		RayType_Infinite, NotHitSelf, client);
 	TR_GetEndPosition(trace_end_pos, INVALID_HANDLE);
 
-	SpawnDecoration(trace_end_pos, eye_ang, is_speccing);
+	SpawnDecoration(trace_end_pos, eye_ang);
 
 	++_numPerPlayer[client];
 
@@ -221,7 +206,7 @@ static stock void Dp_WriteFloatArray(DataPack target, const float[] arr, int cou
 #endif
 }
 
-void SpawnDecoration(const float pos[3], const float ang[3], const bool for_spectators_only = false)
+void SpawnDecoration(const float pos[3], const float ang[3])
 {
 	TE_Start("physicsprop");
 	TE_WriteVector("m_vecOrigin", pos);
@@ -233,19 +218,14 @@ void SpawnDecoration(const float pos[3], const float ang[3], const bool for_spec
 	TE_WriteNum("m_nFlags", 0);
 	int recipients[NEO_MAX_PLAYERS];
 	int num_recipients;
-	if (!for_spectators_only) {
-		for (int client = 1; client <= MaxClients; ++client) {
-			if (IsClientInGame(client) && !IsClientSourceTV(client) && !IsClientReplay(client)) {
-				recipients[num_recipients++] = client;
-			}
-		}
-	} else {
-		for (int client = 1; client <= MaxClients; ++client) {
-			if (IsClientInGame(client) && (!IsPlayerAlive(client) || GetClientTeam(client) <= TEAM_SPECTATOR) && !IsClientSourceTV(client) && !IsClientReplay(client)) {
-				recipients[num_recipients++] = client;
-			}
+
+	for (int client = 1; client <= MaxClients; ++client) {
+		if (IsClientInGame(client) && !IsClientSourceTV(client) && !IsClientReplay(client)) {
+			recipients[num_recipients++] = client;
 		}
 	}
+
+	
 	if (num_recipients != 0) {
 		TE_Send(recipients, num_recipients, 0.0);
 	}
@@ -254,15 +234,12 @@ void SpawnDecoration(const float pos[3], const float ang[3], const bool for_spec
 public void OnConfigsExecuted()
 {
 	if (g_hCvar_Timelimit == null) {
-		g_hCvar_Timelimit = FindConVar("neo_round_timelimit");
-	}
-	if (g_hCvar_Scorelimit == null) {
-		g_hCvar_Scorelimit = FindConVar("neo_score_limit");
+		g_hCvar_Timelimit = FindConVar("mp_timelimit");
 	}
 	if (g_hCvar_Chattime == null) {
 		g_hCvar_Chattime = FindConVar("mp_chattime");
 	}
-	if (g_hCvar_Timelimit == null || g_hCvar_Scorelimit == null || g_hCvar_Chattime == null) {
+	if (g_hCvar_Timelimit == null || g_hCvar_Chattime == null) {
 		SetFailState("Failed to find cvar(s)");
 	}
 
@@ -344,7 +321,7 @@ void LightDecorationLocations()
 	_dp_decoration_positions.Reset();
 
 	// This timer will persist across newrounds, so setting to maximum map length for a standard CTG server setup.
-	float time = (g_hCvar_Scorelimit.IntValue * 2 - 1) * (g_hCvar_Timelimit.FloatValue * 60 + g_hCvar_Chattime.FloatValue);
+	float time = g_hCvar_Timelimit.FloatValue * 60;
 	for (int i = 0; i < _num_decoration_positions; ++i)
 	{
 		Dp_ReadFloatArray(_dp_decoration_positions, xyz, sizeof(xyz)); // twice because skip angles
@@ -362,24 +339,5 @@ void LightDecorationLocations()
 		// Only one TE dynamic light allowed at a time, so we light the one that's in each client's PVS.
 		// Should only have one light per PVS to avoid lights visibly turning off.
 		TE_SendToAllInRange(xyz, RangeType_Visibility, 0.0);
-	}
-}
-
-public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
-{
-	for (int i = 0; i < sizeof(_numPerPlayer); ++i) {
-		_numPerPlayer[i] = 0;
-	}
-
-	if (_dp_decoration_positions != null) {
-		float xyz[3];
-		float rot[3];
-		_dp_decoration_positions.Reset();
-		for (int i = 0; i < _num_decoration_positions; ++i)
-		{
-			Dp_ReadFloatArray(_dp_decoration_positions, rot, sizeof(rot));
-			Dp_ReadFloatArray(_dp_decoration_positions, xyz, sizeof(xyz));
-			SpawnDecoration(xyz, rot);
-		}
 	}
 }
